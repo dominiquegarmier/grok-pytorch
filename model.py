@@ -1,5 +1,8 @@
 """\
-the code below is a reimplentation of https://github.com/xai-org/grok-1
+the code below is a reimplentation of:
+    https://github.com/xai-org/grok-1
+lincesed under:
+    Apache License 2.0
 """
 
 from __future__ import annotations
@@ -8,8 +11,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dataclasses import dataclass
-from typing import NamedTuple
 from typing import Annotated
 from einops import rearrange, einsum
 import math
@@ -64,7 +65,7 @@ class RoPE(nn.Module):
     _freqs_cis: Annotated[torch.Tensor, torch.complex64, "T", "D"]
     _scale: Annotated[torch.Tensor, "D"]
 
-    def __init__(self, dim: int, seq_len: int = 2048, theta: float = 10000.0) -> None:
+    def __init__(self, dim: int, seq_len: int = 8192, theta: float = 10000.0) -> None:
         super().__init__()
         self.dim = dim
         self.theta = theta
@@ -116,107 +117,48 @@ class RoPE(nn.Module):
         return (x * freqs_cos) + (self.rotate_half(x) * freqs_sin)
 
 
-class MultiLayerPerceptron(nn.Module):
+class DenseMultiLayerPerceptron(nn.Module):
     dim: int
-    hidden_dim: int
+    dim_inner: int
 
-    lin_in: nn.Linear
-    lin_out: nn.Linear
-    act: nn.GELU
+    def __init__(self, dim: int, dim_inner: int) -> None:
+        super().__init__()
 
-    def __init__(
-        self, dim: int, hidden_dim: int | None, expansion_ratio: float = 1.0
-    ) -> None:
-        """\
-        if hidden_dim is not specified, it will be set to dim * expansion_ratio else expansion_ratio will be ignored
-        """
         self.dim = dim
-        self.hidden_dim = hidden_dim or int(dim * expansion_ratio)
+        self.dim_inner = dim_inner
 
-        self.lin_in = nn.Linear(self.dim, self.hidden_dim)
-        self.lin_out = nn.Linear(self.hidden_dim, self.dim)
-        self.act = nn.GELU()  # TODO support other activations
+        self.lin_in = nn.Linear(dim, dim_inner)
+        self.lin_out = nn.Linear(dim_inner, dim)
+        self.lin_scale = nn.Linear(dim, dim_inner)
+
+        self.act = nn.GELU()
 
     def forward(
         self, x: Annotated[torch.Tensor, ..., "D"]
     ) -> Annotated[torch.Tensor, ..., "D"]:
-        return self.lin_out(self.act(self.lin_in(x)))
+        inner = self.act(self.lin_in(x)) * self.lin_scale(x)
+        return self.lin_out(inner)
 
 
-class AttentionLinearBias(nn.Module):
-    """\
-    implementation of: https://arxiv.org/abs/2108.12409
-    """
-
-    _cached_seq_len: int
-    _bias_buffer: Annotated[torch.Tensor, "T", "T"]
-    _factor: float
-
-    def __init__(self, seq_len: int, factor: float = 1 / (2**8)) -> None:
-        super().__init__()
-        self._factor = factor
-        self._cached_seq_len = seq_len
-        self.register_buffer("_bias_buffer", self._get_bias(seq_len))
-
-    @staticmethod
-    def _get_bias(
-        l: int, device: torch.device | None = None
-    ) -> Annotated[torch.Tensor, "T", "T"]:
-        a = torch.arange(0, l, device=device or "cpu").reshape(-1, 1)
-        return -torch.relu(a - a.T)
-
-    def forward(
-        self, seq_len: int, n_heads: int, device: torch.device
-    ) -> Annotated[torch.Tensor, "T", "T", "H"]:
-        if seq_len > self._cached_seq_len:
-            next_power_of_two = 2 ** math.ceil(math.log2(seq_len))
-            self._cached_seq_len = next_power_of_two
-            self.register_buffer(
-                "_bias_buffer", self._get_bias(next_power_of_two, device)
-            )
-        bias = self._bias_buffer[:seq_len, :seq_len].reshape(-1, -1, 1)
-        head_factor = self._factor ** (1 / n_heads)
-        k = torch.pow(head_factor, torch.arange(0, n_heads, device=device)).reshape(
-            1, 1, -1
-        )
-        return bias * k
-
-
-class MultiHeadAttention(nn.Module):
+class MultiHeadAttentionBlock(nn.Module):
     """\
     implementation of: https://arxiv.org/abs/1706.03762
-
-    some implementation details were taken from https://github.com/lucidrains/x-transformers
-    which is licended under the...
-
-    MIT License
-
-    Copyright (c) 2020 Phil Wang
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
+    some implementation details were taken from:
+        https://github.com/lucidrains/x-transformers
+    which is licensed under the MIT License
     """
 
     dim: int
-    value_dim: int
-    out_dim: int
-
-    num_heads: int
     k_dim_head: int
     v_dim_head: int
+
+    num_heads: int
+    num_q_heads: int
 
     causal: bool
     use_flash: bool
 
-    rotary_pos_emb: RoPE | None
-    attention_linear_bias: AttentionLinearBias | None
+    rotary_pos_emb: RoPE
 
     def __init__(
         self,
@@ -224,25 +166,21 @@ class MultiHeadAttention(nn.Module):
         causal: bool = True,
         use_flash: bool = False,
         num_heads: int = 8,
-        k_dim_head: int = 64,
-        v_dim_head: int = 64,
-        value_dim: int | None = None,
-        out_dim: int | None = None,
-        rotary_pos_emb: RoPE | None = None,
-        attention_linear_bias: AttentionLinearBias | None = None,
+        num_q_heads: int | None = None,
+        k_dim_head: int = 128,
+        v_dim_head: int = 128,
     ) -> None:
         super().__init__()
 
-        if value_dim is None:
-            value_dim = dim
-        if out_dim is None:
-            out_dim = value_dim
-
         self.dim = dim
-        self.value_dim = value_dim
-        self.out_dim = out_dim
 
         self.num_heads = num_heads
+        self.num_q_heads = num_q_heads or num_heads
+        assert (
+            self.num_q_heads % self.num_heads == 0
+            and self.num_q_heads >= self.num_heads
+        ), "num_q_heads must be a proper multiple of num_heads"
+
         self.k_dim_head = k_dim_head
         self.v_dim_head = v_dim_head
 
@@ -250,180 +188,315 @@ class MultiHeadAttention(nn.Module):
         self.use_flash = use_flash  # TODO implement flash
 
         # positional embedding
-        assert (
-            rotary_pos_emb is None or attention_linear_bias is None
-        ), "can't use RoPE and ALiBi at the same time"
-        self.rotary_pos_emb = rotary_pos_emb
-        self.attention_linear_bias = attention_linear_bias
+        self.rotary_pos_emb = RoPE(dim)
 
         v_dim = self.v_dim_head * self.num_heads
-        q_dim = k_dim = self.k_dim_head * self.num_heads
+        k_dim = self.k_dim_head * self.num_heads
+        q_dim = self.k_dim_head * self.num_q_heads
 
         self.w_q = nn.Linear(self.dim, q_dim, bias=False)
         self.w_k = nn.Linear(self.dim, k_dim, bias=False)
-        self.w_v = nn.Linear(self.value_dim, v_dim, bias=False)
-        self.w_o = nn.Linear(v_dim, self.out_dim, bias=False)
+        self.w_v = nn.Linear(self.dim, v_dim, bias=False)
+        self.w_o = nn.Linear(q_dim, self.dim, bias=False)
 
     def forward(
         self,
         q: Annotated[torch.Tensor, ..., "T", "K"],
         k: Annotated[torch.Tensor, ..., "T", "K"],
         v: Annotated[torch.Tensor, ..., "T", "V"],
-        mask: Annotated[torch.Tensor, "T", "T"] | None = None,
+        mask: Annotated[torch.Tensor, ..., "T", "T"] | None = None,
     ) -> Annotated[torch.Tensor, ..., "T", "O"]:
         assert q.shape[:-2] == k.shape[:-2] == v.shape[:-2]
         assert q.shape[-1] == k.shape[-1] == self.dim
-        assert v.shape[-1] == self.value_dim
+        assert v.shape[-1] == self.dim
         if mask is not None:
             assert mask.shape == (q.shape[-2], k.shape[-2])
         B = q.shape[:-2]  # batch shape
 
-        q_i = rearrange(self.w_q(q), "... T (H k) -> ... H T k", H=self.num_heads)
-        k_i = rearrange(self.w_k(k), "... T (H k) -> ... H T k", H=self.num_heads)
-        v_i = rearrange(self.w_v(v), "... T (H v) -> ... H T v", H=self.num_heads)
+        q_i = rearrange(self.w_q(q), "... T (HQ k) -> ... HQ T k", HQ=self.num_q_heads)
+        k_i = rearrange(self.w_k(k), "... T (HK k) -> ... HK T k", HK=self.num_heads)
+        v_i = rearrange(self.w_v(v), "... T (HK v) -> ... HK T v", HK=self.num_heads)
 
-        if self.rotary_pos_emb is not None:
+        q_i = rearrange(q_i, "... HQ T k -> ... HK h T k", HK=self.num_heads)
+
+        # apply rope
+        def _apply_rope(
+            x: Annotated[torch.Tensor, ...]
+        ) -> Annotated[torch.Tensor, ...]:
             rope_dim = self.rotary_pos_emb.dim
+            return torch.cat(
+                (self.rotary_pos_emb(x[..., :rope_dim]), x[..., rope_dim:]), dim=-1
+            )
 
-            def _apply(x: torch.Tensor) -> torch.Tensor:
-                if TYPE_CHECKING:
-                    assert self.rotary_pos_emb is not None
-                return torch.cat(
-                    (self.rotary_pos_emb(x[..., :rope_dim]), x[..., rope_dim:]), dim=-1
-                )
-
-            q_i = _apply(q_i)
-            k_i = _apply(k_i)
-            v_i = _apply(v_i)
+        q_i = _apply_rope(q_i)
+        k_i = _apply_rope(k_i)
+        v_i = _apply_rope(v_i)
 
         # use scaled dot product similarity
-        s_qk = einsum(q_i, k_i, "... H i k, ... H j k -> ... H i j")
-
+        s_qk = einsum(q_i, k_i, "... HK h i k, ... HK j k -> ... HK h i j")
         s_qk = s_qk / (q_i.shape[-1] ** 0.5)
 
         # apply mask
         if mask is not None:
-            mask = mask.view(*B, *mask.shape)
+            mask = mask.view(*B, 1, *mask.shape)
             mask_value = -torch.finfo(s_qk.dtype).max
             s_qk = s_qk.masked_fill(~mask, mask_value)
 
         # softmax
         attn: Annotated[torch.Tensor, ..., "H", "T", "T"] = F.softmax(s_qk, dim=-1)
 
-        vals = einsum(attn, v_i, "... H T i, ... H i v -> ... H T v")
-        out = self.w_o(rearrange(vals, "... H T v -> ... T (H v)"))
+        vals = einsum(attn, v_i, "... HK h T i, ... HK i v -> ... HK h T v")
+        vals = rearrange(vals, "... HK h T v -> ... T (HK h v)")
+        out = self.w_o(vals)
         return out
 
 
-class MultiHeadAttentionBlock(nn.Module):
+class Router(nn.Module):
     dim: int
+    num_experts: int
 
-    attn: MultiHeadAttentionBlock
-    mlp: MultiLayerPerceptron
+    def __init__(self, num_experts: int, dim: int) -> None:
+        super().__init__()
 
-    pre_norm: RMSNorm
-    post_norm: RMSNorm
+        self.num_experts = num_experts
+        self.dim = dim
+        self.lin = nn.Linear(dim, num_experts, bias=False)
 
-    attn_dropout: nn.Dropout | None = None
-    mem_dropout: nn.Dropout | None = None
-    dropout: nn.Dropout | None = None
+    def forward(
+        self, states: Annotated[torch.Tensor, "(B T)", "D"]
+    ) -> Annotated[torch.Tensor, "(B T)", "H"]:
+        router_logits = self.gate(states)
+        router_weights = F.softmax(router_logits, dim=-1)
+        return router_weights
+
+
+class MoEBlock(nn.Module):
+    """\
+    some code from this class is a rewrite of huggingface's implementation 
+    of mixtral: huggingface/transformers/models/mixtral/modeling_mixtral.py
+    ...which is licensed under the Apache License 2.0
+    """
+
+    dim: int
+    dim_inner: int
+    num_experts: int
+    num_selected_experts: int
+
+    router: Router
+    experts: nn.ModuleList
 
     def __init__(
-        self,
-        dim: int,
-        dropout: float | None = None,
-        attn_dropout: float | None = None,
+        self, dim: int, dim_inner: int, num_experts: int, num_selected_experts: int
     ) -> None:
         super().__init__()
 
         self.dim = dim
-        self.attn = MultiHeadAttentionBlock(self.dim)
-        self.mlp = MultiLayerPerceptron(self.dim, hidden_dim=4 * self.dim)
+        self.dim_inner = dim_inner
 
-        self.pre_norm = RMSNorm(self.dim)
-        self.post_norm = RMSNorm(self.dim)
-
-        if dropout is not None:
-            self.dropout = nn.Dropout(dropout)
-
-        if attn_dropout is not None:
-            self.attn_dropout = nn.Dropout(attn_dropout)
-
-    def forward(
-        self, x: Annotated[torch.Tensor, ..., "B", "T", "D"]
-    ) -> Annotated[torch.Tensor, ..., "T", "D"]:
-        k = self.pre_norm(x)
-        attn = self.attn(k, k, k)
-
-        if self.attn_dropout is not None:
-            attn = self.attn_dropout(attn)
-
-        r = k + attn
-        m = self.post_norm(r)
-        m = self.mlp(m)
-
-        if self.dropout is not None:
-            m = self.dropout(m)
-
-        return r + m
-
-
-class Router(nn.Module):
-    num_experts: int
-    num_selected_experts: int
-    sequence_length: int
-
-    def __init__(
-        self, num_experts: int, num_selected_experts: int, sequence_length: int
-    ) -> None:
         self.num_experts = num_experts
         self.num_selected_experts = num_selected_experts
-        self.sequence_length = sequence_length
 
-        self.lin = nn.Linear(sequence_length, num_experts, bias=False)
+        self.router = Router(self.num_experts, self.dim)
+        self.experts = nn.ModuleList(
+            [
+                DenseMultiLayerPerceptron(self.dim, self.dim_inner)
+                for _ in range(self.num_experts)
+            ]
+        )
 
     def forward(
-        self, x: Annotated[torch.Tensor, "B", "T", "D"]
-    ) -> Annotated[torch.Tensor, "B", "M", "D"]:
-        logits = self.lin(x)
-        return F.softmax(logits, dim=-1)
+        self, states: Annotated[torch.Tensor, "B", "T", "D"]
+    ) -> Annotated[torch.Tensor, "B", "T", "D"]:
+        B, T, _ = states.shape
+        states = rearrange(states, "B T D -> (B T) D")
+
+        router_weights = self.router(states)
+
+        # truncate top k and normalize
+        router_weights, selected_experts = torch.topk(
+            router_weights, self.num_selected_experts, dim=-1
+        )
+        router_weights /= router_weights.sum(dim=-1, keepdim=True)
+
+        expert_mask = F.one_hot(selected_experts, self.num_experts)
+        expert_mask = rearrange(expert_mask, "(B T) K H -> H K (B T)")
+
+        ret = torch.zeros_like(states)
+
+        for expert_idx in range(self.num_experts):
+            mask: Annotated[torch.Tensor, "K", "(B T)"] = expert_mask[expert_idx]
+            k_idx, batch_idx = torch.where(mask)
+
+            if batch_idx.shape[0] == 0:
+                continue  # if this expert is not used by any token across the batch
+
+            batch_idx_lst = batch_idx.tolist()
+            k_idx_lst = k_idx.tolist()
+
+            tiled_states = rearrange(
+                states[None, batch_idx_lst], "H (B T) D -> H (B T) D"
+            )
+            expert_states = self.experts[expert_idx](tiled_states)
+            expert_states *= router_weights[batch_idx_lst, k_idx_lst, None]
+
+            ret[batch_idx_lst, k_idx_lst, :] = expert_states  # does this work?
+
+        return rearrange(ret, "(B T) D -> B T D", B=B, T=T)
 
 
-class MixtureOfExpertsLayer(nn.Module):
+class GrokLayer(nn.Module):
+    dim: int
+    dim_inner: int
+
     num_experts: int
-    router: Router
+    num_selected_experts: int
 
-    def __init__(self, num_experts: int, router: Router) -> None:
+    attn: MultiHeadAttentionBlock
+    block: DenseMultiLayerPerceptron | MoEBlock
+
+    attn_pre_norm: RMSNorm
+    moe_pre_norm: RMSNorm
+    attn_post_norm: RMSNorm
+    moe_post_norm: RMSNorm
+
+    def __init__(
+        self,
+        dim: int,
+        dim_inner: int,
+        num_heads: int = 8,
+        num_q_heads: int = 64,
+        num_experts: int = 8,
+        num_selected_experts: int = 2,
+        k_dim_head: int = 128,
+        v_dim_head: int = 128,
+    ) -> None:
+        super().__init__()
+
+        self.dim = dim
+        self.dim_inner = dim_inner
         self.num_experts = num_experts
-        self.router = router
+        self.num_selected_experts = num_selected_experts
+
+        self.attn = MultiHeadAttentionBlock(
+            self.dim,
+            num_heads=num_heads,
+            num_q_heads=num_q_heads,
+            k_dim_head=k_dim_head,
+            v_dim_head=v_dim_head,
+        )
+
+        assert self.num_experts > self.num_selected_experts
+
+        if self.num_experts <= 1:
+            self.block = DenseMultiLayerPerceptron(self.dim, self.dim_inner)
+        else:
+            self.block = MoEBlock(
+                dim=self.dim,
+                dim_inner=self.dim_inner,
+                num_experts=self.num_experts,
+                num_selected_experts=self.num_selected_experts,
+            )
+
+        self.moe_pre_norm = RMSNorm(self.dim)
+        self.attn_pre_norm = RMSNorm(self.dim)
+        self.attn_post_norm = RMSNorm(self.dim)
+        self.moe_post_norm = RMSNorm(self.dim)
 
     def forward(
-        self, x: Annotated[torch.Tensor, ..., "B", "T", "D"]
-    ) -> Annotated[torch.Tensor, ..., "B", "T", "D"]:
-        ...
+        self,
+        embeddings: Annotated[torch.Tensor, ..., "B", "T", "D"],
+        mask: Annotated[torch.Tensor, "B", "T", "T"] | None = None,
+    ) -> Annotated[torch.Tensor, ..., "T", "D"]:
+        # attention
+        key = self.attn_pre_norm(embeddings)
+        attn = self.attn(key, key, key, mask=mask)
+        embeddings += self.attn_post_norm(attn)
+
+        # mixture of experts
+        moe = self.moe_pre_norm(embeddings)
+        moe = self.block(moe)
+        embeddings += self.moe_post_norm(moe)
+
+        return embeddings
 
 
-class DenseBlock(nn.Module):
-    ...
+class Grok(nn.Module):
+    dim: int
+    dim_inner: int
 
+    num_layers: int
 
-class DecoderLayer(nn.Module):
-    ...
+    num_experts: int
+    num_selected_experts: int
 
+    num_heads: int
+    num_q_heads: int
+    k_dim_head: int
+    v_dim_head: int
 
-@dataclass
-class TransformerConfig:
-    ...
+    def __init__(
+        self,
+        dim: int = 6144,
+        widening_factor: int = 8,
+        num_layers: int = 64,
+        num_experts: int = 8,
+        num_selected_experts: int = 2,
+        num_heads: int = 8,
+        num_q_heads: int = 48,
+        k_dim_head: int = 128,
+        v_dim_head: int = 128,
+    ):
+        super().__init__()
 
+        self.dim = dim
+        self.dim_inner = dim * widening_factor
 
-@dataclass
-class LanguageModelConfig:
-    ...
+        self.num_layers = num_layers
 
+        self.num_experts = num_experts
+        self.num_selected_experts = num_selected_experts
 
-class Transformer(nn.Module):
-    ...
+        self.num_heads = num_heads
+        self.num_q_heads = num_q_heads
+        self.k_dim_head = k_dim_head
+        self.v_dim_head = v_dim_head
 
+        # I don't like big multi-line list comprehensions :(
+        _layers = []
+        for _ in range(self.num_layers):
+            layer = GrokLayer(
+                dim=self.dim,
+                dim_inner=self.dim_inner,
+                num_heads=self.num_heads,
+                num_q_heads=self.num_q_heads,
+                num_experts=self.num_experts,
+                num_selected_experts=self.num_selected_experts,
+                k_dim_head=self.k_dim_head,
+                v_dim_head=self.v_dim_head,
+            )
+            _layers.append(layer)
 
-class LanguageModel(nn.Module):
-    ...
+        self.layers = nn.ModuleList(_layers)
+
+    def forward(
+        self,
+        embeddings: Annotated[torch.Tensor, "B", "T", "D"],
+        token_mask: Annotated[torch.Tensor, "B", "T"] | None = None,
+    ) -> Annotated[torch.Tensor, "B", "T", "D"]:
+        B, T, D = embeddings.shape
+
+        assert D == self.dim
+        assert token_mask is None or token_mask.shape == (B, T)
+
+        if token_mask is None:
+            token_mask = torch.ones(B, T, dtype=torch.bool, device=embeddings.device)
+
+        # causal masking for autoregressive language modeling
+        mask: Annotated[torch.Tensor, "B", "T", "T"] = token_mask[:, None, :]
+        causal_mask = torch.triu(torch.ones((1, T, T), device=mask.device))
+        mask = mask * causal_mask
+
+        for layer in self.layers:
+            embeddings = layer(embeddings, mask=mask)
+
+        return embeddings
