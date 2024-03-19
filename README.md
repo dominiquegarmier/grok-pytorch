@@ -16,7 +16,7 @@ grok or grok-1 is a newly [opensourced](https://github.com/xai-org/grok-1) mixtu
 [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://arxiv.org/abs/2104.09864)
 ```bibtex
 @misc{su2023roformer,
-      title={RoFormer: Enhanced Transformer with Rotary Position Embedding}, 
+      title={RoFormer: Enhanced Transformer with Rotary Position Embedding},
       author={Jianlin Su and Yu Lu and Shengfeng Pan and Ahmed Murtadha and Bo Wen and Yunfeng Liu},
       year={2023},
       eprint={2104.09864},
@@ -38,7 +38,7 @@ grok or grok-1 is a newly [opensourced](https://github.com/xai-org/grok-1) mixtu
 [Root Mean Square Layer Normalization](https://arxiv.org/abs/1910.07467)
 ```bibtex
 @misc{zhang2019root,
-      title={Root Mean Square Layer Normalization}, 
+      title={Root Mean Square Layer Normalization},
       author={Biao Zhang and Rico Sennrich},
       year={2019},
       eprint={1910.07467},
@@ -46,4 +46,3 @@ grok or grok-1 is a newly [opensourced](https://github.com/xai-org/grok-1) mixtu
       primaryClass={cs.LG}
 }
 ```
-

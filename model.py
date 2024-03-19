@@ -3,8 +3,7 @@ the code below is a reimplentation of:
     https://github.com/xai-org/grok-1
 lincesed under:
     Apache License 2.0
-"""
-
+"""  # fmt: skip
 from __future__ import annotations
 
 import math
@@ -13,7 +12,8 @@ from typing import Annotated
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import einsum, rearrange
+from einops import einsum
+from einops import rearrange
 
 
 class RMSNorm(nn.Module):
@@ -97,7 +97,7 @@ class RoPE(nn.Module):
 
     @staticmethod
     def rotate_half(
-        x: Annotated[torch.Tensor, ..., "D"]
+        x: Annotated[torch.Tensor, ..., "D"],
     ) -> Annotated[torch.Tensor, ..., "D"]:
         x = rearrange(x, "... (j d) -> ... j d", j=2)
         x1, x2 = x.unbind(dim=-2)
@@ -220,7 +220,7 @@ class MultiHeadAttentionBlock(nn.Module):
 
         # apply rope
         def _apply_rope(
-            x: Annotated[torch.Tensor, ...]
+            x: Annotated[torch.Tensor, ...],
         ) -> Annotated[torch.Tensor, ...]:
             rope_dim = self.rotary_pos_emb.dim
             return torch.cat(
@@ -271,7 +271,7 @@ class Router(nn.Module):
 
 class MoEBlock(nn.Module):
     """\
-    some code from this class is a rewrite of huggingface's implementation 
+    some code from this class is a rewrite of huggingface's implementation
     of mixtral: huggingface/transformers/models/mixtral/modeling_mixtral.py
     ...which is licensed under the Apache License 2.0
     """
