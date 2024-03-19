@@ -7,14 +7,13 @@ lincesed under:
 
 from __future__ import annotations
 
+import math
+from typing import TYPE_CHECKING, Annotated
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from typing import Annotated
-from einops import rearrange, einsum
-import math
-from typing import TYPE_CHECKING
+from einops import einsum, rearrange
 
 
 class RMSNorm(nn.Module):
