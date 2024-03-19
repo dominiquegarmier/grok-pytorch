@@ -1,6 +1,8 @@
 # grok-pytorch
 my best attempt of implementing grok in pytorch
 
+hello hello world
+
 ### What is Grok?
 grok or grok-1 is a newly [opensourced](https://github.com/xai-org/grok-1) mixture of experts language model by xai.
 
