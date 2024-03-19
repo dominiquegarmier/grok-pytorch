@@ -5,9 +5,8 @@ my best attempt of implementing grok in pytorch
 grok or grok-1 is a newly [opensourced](https://github.com/xai-org/grok-1) mixture of experts language model by xai.
 
 ### Disclaimer
-This implementation is not intended to be run.
-It is intended to be a reference for understanding the architecture of the grok model, which is also the reason I wrote this.
-Personally I also find it easier to reason about a model architecture when shapes are provided via type hints.
+- This implementation is not intended to be run. It is intended to be a reference for understanding the architecture of the grok model, which is also the reason I wrote this. Personally I also find it easier to reason about a model architecture when shapes are provided via type hints.
+- There are probably still many bugs in this implementation. I have not tested it extensively. And it's also possible that I have missed aspects of the architecture. However it should give you an idea what grok does.t ad
 
 ### Attributions
 - The original implementation of grok in jax and haiku can be found [here](https://github.com/xai-org/grok-1).
