@@ -8,7 +8,7 @@ lincesed under:
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 import torch
 import torch.nn as nn
