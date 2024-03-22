@@ -10,7 +10,7 @@ grok or grok-1 is a newly [opensourced](https://github.com/xai-org/grok-1) mixtu
 
 ### Attributions
 - The original implementation of grok in jax and haiku can be found [here](https://github.com/xai-org/grok-1).
-- certain parts of the code were adapted from [x-trainsformers](https://github.com/lucidrains/x-transformers) - MIT License, [mema](https://github.com/dominiquegarmier/mema) - MIT License and [huggingface/transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py) - Apache 2.0 License
+- certain parts of the code were adapted from [x-transformers](https://github.com/lucidrains/x-transformers) - MIT License, [mema](https://github.com/dominiquegarmier/mema) - MIT License and [huggingface/transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py) - Apache 2.0 License
 
 ### Citations
 [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://arxiv.org/abs/2104.09864)
